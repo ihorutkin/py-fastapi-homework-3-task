@@ -6,8 +6,6 @@ from database import accounts_validators, UserGroupEnum
 
 
 class UserRegistrationRequestSchema(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     email: EmailStr
     password: str
 
@@ -18,16 +16,21 @@ class UserRegistrationRequestSchema(BaseModel):
 
 
 class UserRegistrationResponseSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     email: EmailStr
 
 
 class UserActivationRequestSchema(BaseModel):
-    pass
+    model_config = ConfigDict(from_attributes=True)
+
+    email: EmailStr
+    token: str
 
 
 class MessageResponseSchema(BaseModel):
-    pass
+    message: str
 
 
 class PasswordResetRequestSchema(BaseModel):

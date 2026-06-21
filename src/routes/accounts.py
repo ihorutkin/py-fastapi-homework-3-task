@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from typing import cast
 
 from fastapi import APIRouter, Depends, status, HTTPException
@@ -18,7 +18,12 @@ from database import (
     RefreshTokenModel,
 )
 from exceptions import BaseSecurityError
-from schemas import UserRegistrationResponseSchema, UserRegistrationRequestSchema
+from schemas import (
+    UserRegistrationResponseSchema,
+    UserRegistrationRequestSchema,
+    MessageResponseSchema,
+    UserActivationRequestSchema,
+)
 from security.interfaces import JWTAuthManagerInterface
 from security.passwords import hash_password
 
@@ -80,3 +85,55 @@ async def register_new_user(
         )
 
     return new_user
+
+
+@router.post(
+    "/activate/", response_model=MessageResponseSchema, status_code=status.HTTP_200_OK
+)
+async def activate_account(
+    activation_data: UserActivationRequestSchema,
+    session: AsyncSession = Depends(get_db),
+):
+    result = await session.execute(
+        select(UserModel).where(UserModel.email == activation_data.email)
+    )
+    db_user = result.scalar_one_or_none()
+
+    token_result = await session.execute(
+        select(ActivationTokenModel).where(
+            ActivationTokenModel.token == activation_data.token
+        )
+    )
+
+    activation_token = token_result.scalar_one_or_none()
+
+    if (
+        db_user is None
+        or activation_token is None
+        or db_user.id != activation_token.user_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired activation token.",
+        )
+
+    if db_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User account is already active.",
+        )
+
+    expires_at = cast(datetime, activation_token.expires_at).replace(
+        tzinfo=timezone.utc
+    )
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired activation token.",
+        )
+
+    db_user.is_active = True
+    await session.delete(activation_token)
+    await session.commit()
+
+    return MessageResponseSchema(message="User account activated successfully.")
