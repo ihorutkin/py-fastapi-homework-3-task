@@ -17,7 +17,7 @@ from database import (
     PasswordResetTokenModel,
     RefreshTokenModel,
 )
-from exceptions import BaseSecurityError
+from exceptions import BaseSecurityError, TokenExpiredError, InvalidTokenError
 from schemas import (
     UserRegistrationResponseSchema,
     UserRegistrationRequestSchema,
@@ -27,6 +27,8 @@ from schemas import (
     PasswordResetCompleteRequestSchema,
     UserLoginResponseSchema,
     UserLoginRequestSchema,
+    TokenRefreshResponseSchema,
+    TokenRefreshRequestSchema,
 )
 from security.interfaces import JWTAuthManagerInterface
 
@@ -288,3 +290,49 @@ async def login(
         refresh_token=refresh_token,
         token_type="bearer",
     )
+
+
+@router.post(
+    "/refresh/",
+    response_model=TokenRefreshResponseSchema,
+    status_code=status.HTTP_200_OK,
+)
+async def access_token_refresh(
+    data: TokenRefreshRequestSchema,
+    session: AsyncSession = Depends(get_db),
+    jwt_manager: JWTAuthManagerInterface = Depends(get_jwt_auth_manager),
+):
+    try:
+        decoded_token = jwt_manager.decode_refresh_token(token=data.refresh_token)
+    except (TokenExpiredError, InvalidTokenError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Token has expired."
+        )
+
+    result_token = await session.execute(
+        select(RefreshTokenModel).where(RefreshTokenModel.token == data.refresh_token)
+    )
+
+    token = result_token.scalar_one_or_none()
+
+    if token is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found."
+        )
+
+    user_id = decoded_token["user_id"]
+
+    result_user = await session.execute(
+        select(UserModel).where(UserModel.id == user_id)
+    )
+
+    user = result_user.scalar_one_or_none()
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found."
+        )
+
+    new_access_token = jwt_manager.create_access_token(data={"user_id": user.id})
+
+    return TokenRefreshResponseSchema(access_token=new_access_token)
