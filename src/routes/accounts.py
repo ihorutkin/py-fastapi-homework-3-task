@@ -25,9 +25,10 @@ from schemas import (
     UserActivationRequestSchema,
     PasswordResetRequestSchema,
     PasswordResetCompleteRequestSchema,
+    UserLoginResponseSchema,
+    UserLoginRequestSchema,
 )
 from security.interfaces import JWTAuthManagerInterface
-from security.passwords import hash_password
 
 router = APIRouter()
 
@@ -235,3 +236,55 @@ async def reset_password_complete(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while resetting the password.",
         )
+
+
+@router.post(
+    "/login/",
+    response_model=UserLoginResponseSchema,
+    status_code=status.HTTP_201_CREATED,
+)
+async def login(
+    credentials: UserLoginRequestSchema,
+    session: AsyncSession = Depends(get_db),
+    jwt_manager: JWTAuthManagerInterface = Depends(get_jwt_auth_manager),
+    settings: BaseAppSettings = Depends(get_settings),
+):
+    result_user = await session.execute(
+        select(UserModel).where(UserModel.email == credentials.email)
+    )
+
+    user = result_user.scalar_one_or_none()
+
+    if user is None or not user.verify_password(credentials.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password.",
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is not activated.",
+        )
+
+    refresh_token = jwt_manager.create_refresh_token(data={"user_id": user.id})
+    access_token = jwt_manager.create_access_token(data={"user_id": user.id})
+
+    try:
+        refresh_token_model = RefreshTokenModel.create(
+            user_id=user.id, days_valid=settings.LOGIN_TIME_DAYS, token=refresh_token
+        )
+        session.add(refresh_token_model)
+        await session.commit()
+    except SQLAlchemyError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while processing the request.",
+        )
+
+    return UserLoginResponseSchema(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+    )
