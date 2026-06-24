@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import select, delete
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from config import get_jwt_auth_manager, get_settings, BaseAppSettings
 from database import (
@@ -23,6 +23,8 @@ from schemas import (
     UserRegistrationRequestSchema,
     MessageResponseSchema,
     UserActivationRequestSchema,
+    PasswordResetRequestSchema,
+    PasswordResetCompleteRequestSchema,
 )
 from security.interfaces import JWTAuthManagerInterface
 from security.passwords import hash_password
@@ -137,3 +139,99 @@ async def activate_account(
     await session.commit()
 
     return MessageResponseSchema(message="User account activated successfully.")
+
+
+@router.post(
+    "/password-reset/request/",
+    response_model=MessageResponseSchema,
+    status_code=status.HTTP_200_OK,
+)
+async def reset_password_token(
+    email: PasswordResetRequestSchema, session: AsyncSession = Depends(get_db)
+):
+    result_user = await session.execute(
+        select(UserModel)
+        .options(selectinload(UserModel.password_reset_token))
+        .where(UserModel.email == email.email)
+    )
+
+    message_response = MessageResponseSchema(
+        message="If you are registered, you will receive an email with instructions."
+    )
+
+    user = result_user.scalar_one_or_none()
+
+    if user is None or not user.is_active:
+        return message_response
+
+    if user.password_reset_token is not None:
+        await session.delete(user.password_reset_token)
+
+    new_password_reset_token_model = PasswordResetTokenModel(user_id=user.id)
+
+    session.add(new_password_reset_token_model)
+    await session.commit()
+
+    return message_response
+
+
+@router.post(
+    "/reset-password/complete/",
+    response_model=MessageResponseSchema,
+    status_code=status.HTTP_200_OK,
+)
+async def reset_password_complete(
+    data: PasswordResetCompleteRequestSchema, session: AsyncSession = Depends(get_db)
+):
+    result_user = await session.execute(
+        select(UserModel).where(UserModel.email == data.email)
+    )
+
+    user = result_user.scalar_one_or_none()
+
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email or token."
+        )
+
+    result_token = await session.execute(
+        select(PasswordResetTokenModel).where(
+            PasswordResetTokenModel.user_id == user.id
+        )
+    )
+
+    token = result_token.scalar_one_or_none()
+
+    if token is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email or token."
+        )
+
+    if token.token != data.token:
+        await session.delete(token)
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email or token."
+        )
+
+    expires_at = cast(datetime, token.expires_at).replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        await session.delete(token)
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email or token."
+        )
+
+    try:
+        user.password = data.password
+        await session.delete(token)
+        await session.commit()
+
+        return MessageResponseSchema(message="Password reset successfully.")
+
+    except SQLAlchemyError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while resetting the password.",
+        )

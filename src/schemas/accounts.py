@@ -34,11 +34,18 @@ class MessageResponseSchema(BaseModel):
 
 
 class PasswordResetRequestSchema(BaseModel):
-    pass
+    email: EmailStr
 
 
 class PasswordResetCompleteRequestSchema(BaseModel):
-    pass
+    email: EmailStr
+    token: str
+    password: str
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return accounts_validators.validate_password_strength(value)
 
 
 class UserLoginResponseSchema(BaseModel):
