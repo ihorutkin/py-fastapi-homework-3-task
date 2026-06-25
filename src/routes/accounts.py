@@ -1,11 +1,11 @@
-from datetime import datetime, timezone, tzinfo
-from typing import cast
+from datetime import datetime, timezone
+from typing import cast, Annotated
 
 from fastapi import APIRouter, Depends, status, HTTPException
-from sqlalchemy import select, delete
-from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import selectinload
 
 from config import get_jwt_auth_manager, get_settings, BaseAppSettings
 from database import (
@@ -17,7 +17,7 @@ from database import (
     PasswordResetTokenModel,
     RefreshTokenModel,
 )
-from exceptions import BaseSecurityError, TokenExpiredError, InvalidTokenError
+from exceptions import TokenExpiredError, InvalidTokenError
 from schemas import (
     UserRegistrationResponseSchema,
     UserRegistrationRequestSchema,
@@ -34,8 +34,6 @@ from security.interfaces import JWTAuthManagerInterface
 
 router = APIRouter()
 
-# Write your code here
-
 
 @router.post(
     "/register/",
@@ -43,7 +41,8 @@ router = APIRouter()
     status_code=status.HTTP_201_CREATED,
 )
 async def register_new_user(
-    user_data: UserRegistrationRequestSchema, session: AsyncSession = Depends(get_db)
+    user_data: UserRegistrationRequestSchema,
+    session: Annotated[AsyncSession, Depends(get_db)],
 ):
     db_user = await session.execute(
         select(UserModel).where(UserModel.email == user_data.email)
@@ -97,7 +96,7 @@ async def register_new_user(
 )
 async def activate_account(
     activation_data: UserActivationRequestSchema,
-    session: AsyncSession = Depends(get_db),
+    session: Annotated[AsyncSession, Depends(get_db)],
 ):
     result = await session.execute(
         select(UserModel).where(UserModel.email == activation_data.email)
@@ -150,7 +149,7 @@ async def activate_account(
     status_code=status.HTTP_200_OK,
 )
 async def reset_password_token(
-    email: PasswordResetRequestSchema, session: AsyncSession = Depends(get_db)
+    email: PasswordResetRequestSchema, session: Annotated[AsyncSession, Depends(get_db)]
 ):
     result_user = await session.execute(
         select(UserModel)
@@ -184,7 +183,8 @@ async def reset_password_token(
     status_code=status.HTTP_200_OK,
 )
 async def reset_password_complete(
-    data: PasswordResetCompleteRequestSchema, session: AsyncSession = Depends(get_db)
+    data: PasswordResetCompleteRequestSchema,
+    session: Annotated[AsyncSession, Depends(get_db)],
 ):
     result_user = await session.execute(
         select(UserModel).where(UserModel.email == data.email)
@@ -247,9 +247,9 @@ async def reset_password_complete(
 )
 async def login(
     credentials: UserLoginRequestSchema,
-    session: AsyncSession = Depends(get_db),
-    jwt_manager: JWTAuthManagerInterface = Depends(get_jwt_auth_manager),
-    settings: BaseAppSettings = Depends(get_settings),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    jwt_manager: Annotated[JWTAuthManagerInterface, Depends(get_jwt_auth_manager)],
+    settings: Annotated[BaseAppSettings, Depends(get_settings)],
 ):
     result_user = await session.execute(
         select(UserModel).where(UserModel.email == credentials.email)
@@ -299,8 +299,8 @@ async def login(
 )
 async def access_token_refresh(
     data: TokenRefreshRequestSchema,
-    session: AsyncSession = Depends(get_db),
-    jwt_manager: JWTAuthManagerInterface = Depends(get_jwt_auth_manager),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    jwt_manager: Annotated[JWTAuthManagerInterface, Depends(get_jwt_auth_manager)],
 ):
     try:
         decoded_token = jwt_manager.decode_refresh_token(token=data.refresh_token)
@@ -321,6 +321,11 @@ async def access_token_refresh(
         )
 
     user_id = decoded_token["user_id"]
+
+    if token.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found."
+        )
 
     result_user = await session.execute(
         select(UserModel).where(UserModel.id == user_id)

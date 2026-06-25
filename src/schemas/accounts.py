@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, field_validator, ConfigDict
 
-from database import accounts_validators, UserGroupEnum
+from database import accounts_validators
 
 # Write your code here
 
